@@ -1,0 +1,77 @@
+---
+- name: update system
+  become: true
+  hosts: all
+  tasks:
+    - apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 86400
+        autoclean: yes
+
+- name: Install daily tools
+  become: true
+  hosts: all
+  tasks:
+    - apt:
+        name:
+            - curl
+            - nginx
+            - docker.io
+            - default-jre
+        state: present
+
+- name: setup webserver
+  become: true
+  hosts: webserver
+  tasks:
+    - name: users | adding docker users (for use without sudo)
+      user:
+        name: "deploy"
+        append: yes
+        groups: docker
+
+    - name: Set authorized key took from file
+      authorized_key:
+        user: deploy
+        state: present
+        key: "{{ lookup('file', './sshkey.pub') }}"
+
+- name: install java
+  become: true
+  hosts: jenkins
+  vars:
+    jenkins_domain_name: jenkins-ts.ddns.net
+  tasks:
+    - name: Download Long Term Jenkins release
+      get_url:
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io.key
+        dest: /usr/share/keyrings/jenkins-keyring.asc
+    - name: add jenkins key
+      shell: |
+        echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+        https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
+        /etc/apt/sources.list.d/jenkins.list > /dev/null
+    - apt:
+        update_cache: yes
+        autoclean: yes
+        name:
+            - jenkins
+        state: present
+
+    - name: daemon-reload to pick up config changes
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Start jenkins
+      ansible.builtin.systemd:
+        name: jenkins
+        state: started
+    - ansible.builtin.template:
+        src: reverse_proxy_jenkins.j2
+        dest: /etc/nginx/sites-enabled/default
+    - name: restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+
